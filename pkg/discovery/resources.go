@@ -20,6 +20,7 @@ package discovery
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -34,6 +35,13 @@ import (
 
 // PublishResources is a function type to advertise resources.
 type PublishResources func(context.Context, resourceslice.DriverResources) error
+
+// Create a hash of the device name to avoid issues with underscores
+// and other special characters in Kubernetes resource names.
+func hashDeviceName(originalName string) string {
+	hash := sha256.Sum256([]byte(originalName))
+	return fmt.Sprintf("device-%x", hash[:8]) // Use first 8 bytes of hash for shorter names
+}
 
 // Resources periodically discovers network devices
 // and publishes them via the PublishResourcesFunc.
@@ -96,8 +104,10 @@ func (r *Resources) ListDevices() ([]resourcev1.Device, error) {
 	maxVirtualDevices := resource.MustParse("65535")
 
 	for _, nic := range netInfo.NICs {
+		hashedDeviceName := hashDeviceName(nic.Name)
+
 		device := resourcev1.Device{
-			Name: nic.Name,
+			Name: hashedDeviceName,
 			Attributes: map[resourcev1.QualifiedName]resourcev1.DeviceAttribute{
 				v1alpha1.InterfaceName: {StringValue: &nic.Name},
 			},

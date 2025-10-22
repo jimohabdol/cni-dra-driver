@@ -30,6 +30,7 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cni-dra-driver/apis/v1alpha1"
+	"sigs.k8s.io/cni-dra-driver/pkg/validation"
 )
 
 // Runtime represents a CNI (Container Network Interface) runtime environment
@@ -37,6 +38,7 @@ import (
 type Runtime struct {
 	CNIConfig  libcni.CNI
 	DriverName string
+	Validator  *validation.Validator
 }
 
 // New creates and returns a new CNI Runtime instance.
@@ -54,6 +56,7 @@ func New(
 	rntm := &Runtime{
 		CNIConfig:  libcni.NewCNIConfigWithCacheDir(cniPath, cniCacheDir, exec),
 		DriverName: driverName,
+		Validator:  validation.New(driverName),
 	}
 
 	return rntm
@@ -76,6 +79,11 @@ func (rntm *Runtime) AttachNetworks(
 ) (*resourcev1.ResourceClaim, error) {
 	if claim == nil || claim.Status.Allocation == nil { // todo: should we cleanup the status if allocation is nil?
 		return claim, nil
+	}
+
+	// Validate the ResourceClaim before processing
+	if validationResult := rntm.Validator.ValidateResourceClaim(claim); !validationResult.Valid {
+		return claim, fmt.Errorf("ResourceClaim validation failed: %v", validationResult.Errors)
 	}
 
 	requestConfig := map[string]*v1alpha1.CNIConfig{}
@@ -166,6 +174,11 @@ func (rntm *Runtime) add(
 	}
 
 	return result, nil
+}
+
+// ValidateCNIConfig validates a CNI configuration
+func (rntm *Runtime) ValidateCNIConfig(configData []byte) *validation.Result {
+	return rntm.Validator.ValidateCNIWithLibcni(configData)
 }
 
 // DetachNetworks detaches all network interfaces associated with a given pod.

@@ -27,6 +27,7 @@ import (
 	"github.com/containernetworking/cni/pkg/types"
 	cni100 "github.com/containernetworking/cni/pkg/types/100"
 	resourcev1 "k8s.io/api/resource/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apimachinerytypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/cni-dra-driver/apis/v1alpha1"
@@ -230,10 +231,13 @@ func TestRuntime_AttachNetworks(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rntm := &cni.Runtime{
-				CNIConfig:  tt.fields.CNIConfig,
-				DriverName: tt.fields.DriverName,
-			}
+			rntm := cni.New(
+				tt.fields.DriverName,
+				"",                            // chrootDir
+				[]string{"/opt/cni/bin"},      // cniPath
+				"/var/lib/cni/cni-dra-driver", // cniCacheDir
+			)
+			rntm.CNIConfig = tt.fields.CNIConfig
 			got, err := rntm.AttachNetworks(tt.args.ctx, tt.args.podSandBoxID, tt.args.podUID, tt.args.podName, tt.args.podNamespace, tt.args.podNetworkNamespace, tt.args.claim)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Runtime.AttachNetworks() error = %v, wantErr %v", err, tt.wantErr)
@@ -267,6 +271,10 @@ var requestStatusList = []*requestStatus{
 	{
 		Request: "request-1", Driver: driverName, Pool: "pool-name", Device: "device-1", ShareID: nil,
 		cniConfig: &v1alpha1.CNIConfig{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+				Kind:       "CNI",
+			},
 			IfName: "net0",
 			Config: runtime.RawExtension{Raw: []byte(`{"cniVersion":"1.0.0","name":"macvlan-eth0","plugins":[{"type":"macvlan","master":"eth0","mode":"bridge","ipam":{"type":"host-local","ranges":[[{"subnet":"10.10.1.0/24"}]]}}]}`)},
 		},
@@ -276,6 +284,10 @@ var requestStatusList = []*requestStatus{
 	{
 		Request: "request-2", Driver: driverName, Pool: "pool-name", Device: "device-2", ShareID: nil,
 		cniConfig: &v1alpha1.CNIConfig{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+				Kind:       "CNI",
+			},
 			IfName: "net1",
 			Config: runtime.RawExtension{Raw: []byte(`{"cniVersion":"1.0.0","name":"macvlan-eth0","plugins":[{"type":"macvlan","master":"eth0","mode":"bridge","ipam":{"type":"host-local","ranges":[[{"subnet":"10.11.1.0/24"}]]}}]}`)},
 		},
@@ -285,6 +297,10 @@ var requestStatusList = []*requestStatus{
 	{
 		Request: "request-3", Driver: driverName, Pool: "pool-name", Device: "device-3", ShareID: nil,
 		cniConfig: &v1alpha1.CNIConfig{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+				Kind:       "CNI",
+			},
 			IfName: "net2",
 			Config: runtime.RawExtension{Raw: []byte(`{"cniVersion":"1.0.0","name":"macvlan-eth0","plugins":[{"type":"macvlan","master":"eth0","mode":"bridge","ipam":{"type":"host-local","ranges":[[{"subnet":"10.12.1.0/24"}]]}}]}`)},
 		},
@@ -337,6 +353,12 @@ func newResourceClaim(
 				Devices: resourcev1.DeviceAllocationResult{
 					Results: deviceRequestAllocationResult,
 					Config:  config,
+				},
+			},
+			ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+				{
+					Resource: "pods",
+					UID:      apimachinerytypes.UID("pod-uid"),
 				},
 			},
 			Devices: allocatedDeviceStatus,
