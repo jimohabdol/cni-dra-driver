@@ -81,11 +81,6 @@ func (rntm *Runtime) AttachNetworks(
 		return claim, nil
 	}
 
-	// Validate the ResourceClaim before processing
-	if validationResult := rntm.Validator.ValidateResourceClaim(claim); !validationResult.Valid {
-		return claim, fmt.Errorf("ResourceClaim validation failed: %v", validationResult.Errors)
-	}
-
 	requestConfig := map[string]*v1alpha1.CNIConfig{}
 	for _, config := range claim.Status.Allocation.Devices.Config {
 		if config.Opaque == nil || config.Opaque.Driver != rntm.DriverName {
@@ -176,9 +171,15 @@ func (rntm *Runtime) add(
 	return result, nil
 }
 
-// ValidateCNIConfig validates a CNI configuration
 func (rntm *Runtime) ValidateCNIConfig(configData []byte) *validation.Result {
-	return rntm.Validator.ValidateCNIWithLibcni(configData)
+	result := &validation.Result{Valid: true}
+
+	var jsonData interface{}
+	if err := json.Unmarshal(configData, &jsonData); err != nil {
+		result.AddError("config", string(configData), fmt.Sprintf("invalid JSON: %v", err))
+	}
+
+	return result
 }
 
 // DetachNetworks detaches all network interfaces associated with a given pod.

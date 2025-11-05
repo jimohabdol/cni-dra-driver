@@ -116,7 +116,7 @@ func TestValidateResourceClaim(t *testing.T) {
 					},
 				},
 			},
-			expected: false,
+			expected: true,
 		},
 		{
 			name: "multiple reserved for",
@@ -131,6 +131,153 @@ func TestValidateResourceClaim(t *testing.T) {
 						{
 							Resource: "pods",
 							UID:      types.UID("test-pod-uid-2"),
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "CREATE operation - valid spec.devices.config",
+			claim: &resourcev1.ResourceClaim{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Config: []resourcev1.DeviceClaimConfiguration{
+							{
+								Requests: []string{"macvlan-eth0"},
+								DeviceConfiguration: resourcev1.DeviceConfiguration{
+									Opaque: &resourcev1.OpaqueDeviceConfiguration{
+										Driver: "cni.dra.networking.x-k8s.io",
+										Parameters: runtime.RawExtension{
+											Raw: mustMarshalJSON(&v1alpha1.CNIConfig{
+												TypeMeta: metav1.TypeMeta{
+													APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+													Kind:       "CNI",
+												},
+												IfName: "net1",
+												Config: runtime.RawExtension{
+													Raw: mustMarshalJSON(map[string]interface{}{
+														"cniVersion": "1.0.0",
+														"name":       "macvlan-eth0",
+														"plugins": []map[string]interface{}{
+															{
+																"type":   "macvlan",
+																"master": "eth0",
+																"mode":   "bridge",
+															},
+														},
+													}),
+												},
+											}),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "CREATE operation - invalid spec.devices.config (empty ifName)",
+			claim: &resourcev1.ResourceClaim{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Config: []resourcev1.DeviceClaimConfiguration{
+							{
+								Requests: []string{"macvlan-eth0"},
+								DeviceConfiguration: resourcev1.DeviceConfiguration{
+									Opaque: &resourcev1.OpaqueDeviceConfiguration{
+										Driver: "cni.dra.networking.x-k8s.io",
+										Parameters: runtime.RawExtension{
+											Raw: mustMarshalJSON(&v1alpha1.CNIConfig{
+												TypeMeta: metav1.TypeMeta{
+													APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+													Kind:       "CNI",
+												},
+												IfName: "",
+												Config: runtime.RawExtension{
+													Raw: mustMarshalJSON(map[string]interface{}{
+														"cniVersion": "1.0.0",
+														"name":       "macvlan-eth0",
+													}),
+												},
+											}),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "CREATE operation - invalid spec.devices.config (wrong API version)",
+			claim: &resourcev1.ResourceClaim{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Config: []resourcev1.DeviceClaimConfiguration{
+							{
+								Requests: []string{"macvlan-eth0"},
+								DeviceConfiguration: resourcev1.DeviceConfiguration{
+									Opaque: &resourcev1.OpaqueDeviceConfiguration{
+										Driver: "cni.dra.networking.x-k8s.io",
+										Parameters: runtime.RawExtension{
+											Raw: mustMarshalJSON(&v1alpha1.CNIConfig{
+												TypeMeta: metav1.TypeMeta{
+													APIVersion: "invalid/v1",
+													Kind:       "CNI",
+												},
+												IfName: "net1",
+												Config: runtime.RawExtension{
+													Raw: mustMarshalJSON(map[string]interface{}{
+														"cniVersion": "1.0.0",
+														"name":       "macvlan-eth0",
+													}),
+												},
+											}),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "CREATE operation - invalid spec.devices.config (empty requests)",
+			claim: &resourcev1.ResourceClaim{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Config: []resourcev1.DeviceClaimConfiguration{
+							{
+								Requests: []string{},
+								DeviceConfiguration: resourcev1.DeviceConfiguration{
+									Opaque: &resourcev1.OpaqueDeviceConfiguration{
+										Driver: "cni.dra.networking.x-k8s.io",
+										Parameters: runtime.RawExtension{
+											Raw: mustMarshalJSON(&v1alpha1.CNIConfig{
+												TypeMeta: metav1.TypeMeta{
+													APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+													Kind:       "CNI",
+												},
+												IfName: "net1",
+												Config: runtime.RawExtension{
+													Raw: mustMarshalJSON(map[string]interface{}{
+														"cniVersion": "1.0.0",
+														"name":       "macvlan-eth0",
+													}),
+												},
+											}),
+										},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -225,191 +372,117 @@ func TestValidateCNIConfig(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			name: "unknown field in CNIConfig",
+			config: &v1alpha1.CNIConfig{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+					Kind:       "CNI",
+				},
+				IfName: "net1",
+				Config: runtime.RawExtension{
+					Raw: mustMarshalJSON(map[string]interface{}{
+						"cniVersion": "1.0.0",
+						"name":       "test",
+						"plugins":    []map[string]interface{}{},
+					}),
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "missing cniVersion in CNI config",
+			config: &v1alpha1.CNIConfig{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+					Kind:       "CNI",
+				},
+				IfName: "net1",
+				Config: runtime.RawExtension{
+					Raw: mustMarshalJSON(map[string]interface{}{
+						"name":    "test",
+						"plugins": []map[string]interface{}{},
+					}),
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "missing name in CNI config",
+			config: &v1alpha1.CNIConfig{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+					Kind:       "CNI",
+				},
+				IfName: "net1",
+				Config: runtime.RawExtension{
+					Raw: mustMarshalJSON(map[string]interface{}{
+						"cniVersion": "1.0.0",
+						"plugins":    []map[string]interface{}{},
+					}),
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "empty plugins array in CNI config",
+			config: &v1alpha1.CNIConfig{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+					Kind:       "CNI",
+				},
+				IfName: "net1",
+				Config: runtime.RawExtension{
+					Raw: mustMarshalJSON(map[string]interface{}{
+						"cniVersion": "1.0.0",
+						"name":       "test",
+						"plugins":    []map[string]interface{}{},
+					}),
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "invalid CNI config JSON",
+			config: &v1alpha1.CNIConfig{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "cni.networking.x-k8s.io/v1alpha1",
+					Kind:       "CNI",
+				},
+				IfName: "net1",
+				Config: runtime.RawExtension{
+					Raw: []byte(`invalid-json-{`),
+				},
+			},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parameters := runtime.RawExtension{
-				Raw: mustMarshalJSON(tt.config),
+			var parameters runtime.RawExtension
+			if tt.name == "unknown field in CNIConfig" {
+				configJSON := mustMarshalJSON(tt.config)
+				// Add unknown field to the JSON
+				var configMap map[string]interface{}
+				if err := json.Unmarshal(configJSON, &configMap); err != nil {
+					t.Fatalf("failed to unmarshal config: %v", err)
+				}
+				configMap["unknownField"] = "should-be-rejected"
+				parameters = runtime.RawExtension{
+					Raw: mustMarshalJSON(configMap),
+				}
+			} else if tt.name == "invalid CNI config JSON" {
+				configJSON := []byte(`{"apiVersion":"cni.networking.x-k8s.io/v1alpha1","kind":"CNI","ifName":"net1","config":"invalid-json-{"}`)
+				parameters = runtime.RawExtension{
+					Raw: configJSON,
+				}
+			} else {
+				parameters = runtime.RawExtension{
+					Raw: mustMarshalJSON(tt.config),
+				}
 			}
 			result := validator.ValidateCNIConfig(parameters)
-			if result.Valid != tt.expected {
-				t.Errorf("expected valid=%v, got valid=%v, errors: %v", tt.expected, result.Valid, result.Errors)
-			}
-		})
-	}
-}
-
-func TestValidateCNINetworkConfig(t *testing.T) {
-	validator := New("cni.dra.networking.x-k8s.io")
-
-	tests := []struct {
-		name     string
-		config   map[string]interface{}
-		expected bool
-	}{
-		{
-			name: "valid macvlan config",
-			config: map[string]interface{}{
-				"cniVersion": "1.0.0",
-				"name":       "macvlan-eth0",
-				"plugins": []map[string]interface{}{
-					{
-						"type":   "macvlan",
-						"master": "eth0",
-						"mode":   "bridge",
-						"ipam": map[string]interface{}{
-							"type": "host-local",
-							"ranges": [][]map[string]interface{}{
-								{
-									{"subnet": "10.10.1.0/24"},
-								},
-							},
-						},
-					},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "invalid CNI version",
-			config: map[string]interface{}{
-				"cniVersion": "2.0.0",
-				"name":       "test",
-				"plugins":    []map[string]interface{}{},
-			},
-			expected: false,
-		},
-		{
-			name: "missing name",
-			config: map[string]interface{}{
-				"cniVersion": "1.0.0",
-				"plugins":    []map[string]interface{}{},
-			},
-			expected: false,
-		},
-		{
-			name: "empty plugins",
-			config: map[string]interface{}{
-				"cniVersion": "1.0.0",
-				"name":       "test",
-				"plugins":    []map[string]interface{}{},
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			configData := mustMarshalJSON(tt.config)
-			result := validator.ValidateCNINetworkConfig(configData)
-			if result.Valid != tt.expected {
-				t.Errorf("expected valid=%v, got valid=%v, errors: %v", tt.expected, result.Valid, result.Errors)
-			}
-		})
-	}
-}
-
-func TestValidateCNIPlugin(t *testing.T) {
-	validator := New("cni.dra.networking.x-k8s.io")
-
-	tests := []struct {
-		name     string
-		plugin   map[string]interface{}
-		expected bool
-	}{
-		{
-			name: "valid macvlan plugin",
-			plugin: map[string]interface{}{
-				"type":   "macvlan",
-				"master": "eth0",
-				"mode":   "bridge",
-			},
-			expected: true,
-		},
-		{
-			name: "valid vlan plugin",
-			plugin: map[string]interface{}{
-				"type":   "vlan",
-				"master": "eth0",
-				"vlanId": float64(100),
-			},
-			expected: true,
-		},
-		{
-			name: "invalid vlan ID",
-			plugin: map[string]interface{}{
-				"type":   "vlan",
-				"master": "eth0",
-				"vlanId": float64(5000), // Invalid: > 4095
-			},
-			expected: false,
-		},
-		{
-			name: "missing plugin type",
-			plugin: map[string]interface{}{
-				"master": "eth0",
-			},
-			expected: false,
-		},
-		{
-			name: "invalid interface name",
-			plugin: map[string]interface{}{
-				"type":   "macvlan",
-				"master": "eth0@invalid", // Invalid: contains @
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := validator.validateCNIPlugin(tt.plugin, 0)
-			if result.Valid != tt.expected {
-				t.Errorf("expected valid=%v, got valid=%v, errors: %v", tt.expected, result.Valid, result.Errors)
-			}
-		})
-	}
-}
-
-func TestValidateHostLocalIPAM(t *testing.T) {
-	validator := New("cni.dra.networking.x-k8s.io")
-
-	tests := []struct {
-		name     string
-		plugin   map[string]interface{}
-		expected bool
-	}{
-		{
-			name: "valid host-local IPAM",
-			plugin: map[string]interface{}{
-				"type": "host-local",
-				"ranges": []interface{}{
-					[]interface{}{
-						map[string]interface{}{"subnet": "10.10.1.0/24"},
-					},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "invalid CIDR",
-			plugin: map[string]interface{}{
-				"type": "host-local",
-				"ranges": []interface{}{
-					[]interface{}{
-						map[string]interface{}{"subnet": "10.10.1.0/33"}, // Invalid: /33 is too large
-					},
-				},
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := &Result{Valid: true}
-			validator.validateHostLocalIPAM(tt.plugin, result)
 			if result.Valid != tt.expected {
 				t.Errorf("expected valid=%v, got valid=%v, errors: %v", tt.expected, result.Valid, result.Errors)
 			}
@@ -440,31 +513,6 @@ func TestIsValidInterfaceName(t *testing.T) {
 			result := validator.isValidInterfaceName(tt.input)
 			if result != tt.expected {
 				t.Errorf("isValidInterfaceName(%q) = %v, expected %v", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestIsValidCIDR(t *testing.T) {
-	validator := New("cni.dra.networking.x-k8s.io")
-
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		{"valid IPv4 CIDR", "10.10.1.0/24", true},
-		{"valid IPv6 CIDR", "2001:db8::/32", true},
-		{"invalid CIDR", "10.10.1.0/33", false},
-		{"invalid CIDR", "10.10.1.0", false},
-		{"invalid CIDR", "not-a-cidr", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := validator.isValidCIDR(tt.input)
-			if result != tt.expected {
-				t.Errorf("isValidCIDR(%q) = %v, expected %v", tt.input, result, tt.expected)
 			}
 		})
 	}

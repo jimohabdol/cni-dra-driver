@@ -18,8 +18,10 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/containerd/nri/pkg/stub"
@@ -33,6 +35,7 @@ import (
 	"sigs.k8s.io/cni-dra-driver/pkg/nri"
 	"sigs.k8s.io/cni-dra-driver/pkg/status"
 	"sigs.k8s.io/cni-dra-driver/pkg/store"
+	"sigs.k8s.io/cni-dra-driver/pkg/validation"
 )
 
 type runOptions struct {
@@ -44,6 +47,9 @@ type runOptions struct {
 	DRADriverName string
 	NodeName      string
 	verbosity     int
+	WebhookPort   int
+	WebhookCert   string
+	WebhookKey    string
 }
 
 func newCmdRun() *cobra.Command {
@@ -114,6 +120,27 @@ func newCmdRun() *cobra.Command {
 		"Log Level.",
 	)
 
+	cmd.Flags().IntVar(
+		&runOpts.WebhookPort,
+		"webhook-port",
+		0,
+		"Webhook server port. If 0, webhook server is not started.",
+	)
+
+	cmd.Flags().StringVar(
+		&runOpts.WebhookCert,
+		"webhook-cert",
+		"",
+		"Path to TLS certificate for webhook server.",
+	)
+
+	cmd.Flags().StringVar(
+		&runOpts.WebhookKey,
+		"webhook-key",
+		"",
+		"Path to TLS private key for webhook server.",
+	)
+
 	return cmd
 }
 
@@ -135,6 +162,24 @@ func (ro *runOptions) run(ctx context.Context) error {
 	clientset, err := kubernetes.NewForConfig(clientCfg)
 	if err != nil {
 		return fmt.Errorf("failed to NewForConfig: %v", err)
+	}
+
+	if ro.WebhookPort > 0 {
+		webhookServer, err := startWebhookServer(ctx, ro.WebhookPort, ro.WebhookCert, ro.WebhookKey, ro.DRADriverName)
+		if err != nil {
+			return fmt.Errorf("failed to start webhook server: %v", err)
+		}
+		defer webhookServer.Close()
+		klog.FromContext(ctx).Info("Webhook server started", "port", ro.WebhookPort)
+		if ro.NodeName == "" {
+			klog.FromContext(ctx).Info("Running in webhook-only mode")
+			<-ctx.Done()
+			return nil
+		}
+	}
+
+	if ro.NodeName == "" {
+		return fmt.Errorf("node-name is required when not running in webhook-only mode")
 	}
 
 	memoryStore := store.NewMemory()
@@ -187,4 +232,40 @@ func (ro *runOptions) run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func startWebhookServer(ctx context.Context, port int, certPath, keyPath, driverName string) (*http.Server, error) {
+	mux := http.NewServeMux()
+	webhookHandler := validation.WebhookHandler(driverName)
+	mux.Handle("/validate", webhookHandler)
+
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: mux,
+	}
+
+	if certPath != "" && keyPath != "" {
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS certificate: %v", err)
+		}
+		server.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+	}
+
+	go func() {
+		var err error
+		if certPath != "" && keyPath != "" {
+			err = server.ListenAndServeTLS("", "")
+		} else {
+			klog.Warning("Webhook server running without TLS. This isnot recommended for production")
+			err = server.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			klog.Errorf("Webhook server error: %v", err)
+		}
+	}()
+
+	return server, nil
 }

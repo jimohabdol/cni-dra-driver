@@ -100,8 +100,11 @@ func (w *WebhookValidator) validateAdmissionRequest(request *admissionv1.Admissi
 		return response
 	}
 
+	klog.V(4).InfoS("Validating ResourceClaim", "operation", request.Operation, "name", request.Name, "namespace", request.Namespace)
+
 	var claim resourcev1.ResourceClaim
 	if err := json.Unmarshal(request.Object.Raw, &claim); err != nil {
+		klog.Errorf("Failed to parse ResourceClaim: %v", err)
 		response.Allowed = false
 		response.Result = &metav1.Status{
 			Message: fmt.Sprintf("Failed to parse ResourceClaim: %v", err),
@@ -111,6 +114,7 @@ func (w *WebhookValidator) validateAdmissionRequest(request *admissionv1.Admissi
 
 	validationResult := w.validator.ValidateResourceClaim(&claim)
 	if !validationResult.Valid {
+		klog.Errorf("ResourceClaim validation failed: %v", validationResult.Errors)
 		response.Allowed = false
 		response.Result = &metav1.Status{
 			Message: fmt.Sprintf("ResourceClaim validation failed: %v", validationResult.Errors),
@@ -118,9 +122,9 @@ func (w *WebhookValidator) validateAdmissionRequest(request *admissionv1.Admissi
 		return response
 	}
 
+	klog.V(4).InfoS("ResourceClaim validation passed", "operation", request.Operation, "name", request.Name)
 	return response
 }
-
 
 func WebhookHandler(driverName string) http.Handler {
 	return NewWebhookValidator(driverName)

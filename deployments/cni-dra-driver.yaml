@@ -22,6 +22,12 @@ rules:
   - resource.k8s.io
   resources: ["*"]
   verbs: ["*"]
+- apiGroups: ["resource.k8s.io"]
+  resources: ["resourceclaims"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingwebhookconfigurations"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -140,3 +146,90 @@ spec:
       - name: plugins
         hostPath:
           path: /var/lib/kubelet/plugins
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cni-dra-driver-webhook-certs
+  namespace: default
+type: kubernetes.io/tls
+data:
+  tls.crt: ""
+  tls.key: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cni-dra-driver-webhook
+  namespace: default
+  labels:
+    app: cni-dra-driver-webhook
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cni-dra-driver-webhook
+  template:
+    metadata:
+      labels:
+        app: cni-dra-driver-webhook
+    spec:
+      serviceAccountName: cni-dra-driver-service-account
+      containers:
+      - name: webhook
+        image: sigs.k8s.io/cni-dra-driver/cni-dra-driver:latest
+        imagePullPolicy: Always
+        command:
+        - ./cni-dra-driver
+        args:
+        - "run"
+        - "--dra-driver-name=cni.dra.networking.x-k8s.io"
+        - "--webhook-port=8443"
+        - "--webhook-cert=/etc/certs/tls.crt"
+        - "--webhook-key=/etc/certs/tls.key"
+        ports:
+        - containerPort: 8443
+          name: webhook
+        volumeMounts:
+        - name: certs
+          mountPath: /etc/certs
+          readOnly: true
+      volumes:
+      - name: certs
+        secret:
+          secretName: cni-dra-driver-webhook-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cni-dra-driver-webhook
+  namespace: default
+  labels:
+    app: cni-dra-driver-webhook
+spec:
+  selector:
+    app: cni-dra-driver-webhook
+  ports:
+  - port: 443
+    targetPort: 8443
+    name: webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: cni-dra-driver-validation-webhook
+webhooks:
+- name: cni-dra-validation.networking.x-k8s.io
+  clientConfig:
+    service:
+      name: cni-dra-driver-webhook
+      namespace: default
+      path: "/validate"
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: ["resource.k8s.io"]
+    apiVersions: ["v1", "v1beta1"]
+    resources: ["resourceclaims"]
+  failurePolicy: Fail
+  sideEffects: None
+  admissionReviewVersions: ["v1", "v1beta1"]
