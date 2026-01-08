@@ -18,10 +18,9 @@ package cmd
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
-	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/containerd/nri/pkg/stub"
@@ -36,6 +35,8 @@ import (
 	"sigs.k8s.io/cni-dra-driver/pkg/status"
 	"sigs.k8s.io/cni-dra-driver/pkg/store"
 	"sigs.k8s.io/cni-dra-driver/pkg/validation"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
 type runOptions struct {
@@ -165,11 +166,11 @@ func (ro *runOptions) run(ctx context.Context) error {
 	}
 
 	if ro.WebhookPort > 0 {
-		webhookServer, err := startWebhookServer(ctx, ro.WebhookPort, ro.WebhookCert, ro.WebhookKey, ro.DRADriverName)
+		_, err := startWebhookServer(ctx, clientCfg, ro.WebhookPort, ro.WebhookCert, ro.WebhookKey, ro.DRADriverName)
 		if err != nil {
 			return fmt.Errorf("failed to start webhook server: %v", err)
 		}
-		defer webhookServer.Close()
+
 		klog.FromContext(ctx).Info("Webhook server started", "port", ro.WebhookPort)
 		if ro.NodeName == "" {
 			klog.FromContext(ctx).Info("Running in webhook-only mode")
@@ -234,38 +235,50 @@ func (ro *runOptions) run(ctx context.Context) error {
 	return nil
 }
 
-func startWebhookServer(ctx context.Context, port int, certPath, keyPath, driverName string) (*http.Server, error) {
-	mux := http.NewServeMux()
-	webhookHandler := validation.WebhookHandler(driverName)
-	mux.Handle("/validate", webhookHandler)
-
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
+func startWebhookServer(ctx context.Context, cfg *rest.Config, port int, certPath, keyPath, driverName string) (manager.Manager, error) {
+	webhookOptions := webhook.Options{
+		Port: port,
 	}
 
 	if certPath != "" && keyPath != "" {
-		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load TLS certificate: %v", err)
+		certDir := filepath.Dir(certPath)
+		keyDir := filepath.Dir(keyPath)
+
+		if certDir != keyDir {
+			return nil, fmt.Errorf("certificate and key must be in the same directory (cert: %s, key: %s)", certDir, keyDir)
 		}
-		server.TLSConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
+
+		webhookOptions.CertDir = certDir
+		certName := filepath.Base(certPath)
+		keyName := filepath.Base(keyPath)
+
+		if certName != "tls.crt" {
+			webhookOptions.CertName = certName
 		}
+		if keyName != "tls.key" {
+			webhookOptions.KeyName = keyName
+		}
+	} else {
+		klog.Warning("Webhook server running without TLS. This is not recommended for production")
 	}
 
+	// Create new manager
+	mgr, err := manager.New(cfg, manager.Options{
+		WebhookServer: webhook.NewServer(webhookOptions),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create manager: %v", err)
+	}
+
+	webhookHandler := validation.WebhookHandler(driverName)
+	mgr.GetWebhookServer().Register("/validate", webhookHandler)
+
+	// manager start in goroutine
 	go func() {
-		var err error
-		if certPath != "" && keyPath != "" {
-			err = server.ListenAndServeTLS("", "")
-		} else {
-			klog.Warning("Webhook server running without TLS. This isnot recommended for production")
-			err = server.ListenAndServe()
-		}
-		if err != nil && err != http.ErrServerClosed {
+		if err := mgr.Start(ctx); err != nil {
 			klog.Errorf("Webhook server error: %v", err)
 		}
 	}()
 
-	return server, nil
+	return mgr, nil
 }

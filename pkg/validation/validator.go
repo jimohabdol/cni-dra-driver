@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/containernetworking/cni/libcni"
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/cni-dra-driver/apis/v1alpha1"
@@ -167,41 +168,14 @@ func (v *Validator) ValidateCNIConfig(parameters runtime.RawExtension) *Result {
 func (v *Validator) validateCNIConfigSchema(configData []byte) *Result {
 	result := &Result{Valid: true}
 
-	var cniConfig map[string]interface{}
-	if err := json.Unmarshal(configData, &cniConfig); err != nil {
-		result.AddError("raw", string(configData), fmt.Sprintf("failed to parse CNI config JSON: %v", err))
-		return result
-	}
-
-	// Validate CNI version
-	if version, ok := cniConfig["cniVersion"].(string); ok {
-		if version == "" {
-			result.AddError("cniVersion", version, "cniVersion cannot be empty")
-		}
-	} else {
-		result.AddError("cniVersion", cniConfig["cniVersion"], "cniVersion is required and must be a string")
-	}
-
-	// Validate name
-	if name, ok := cniConfig["name"].(string); ok {
-		if name == "" {
-			result.AddError("name", name, "name cannot be empty")
-		}
-	} else {
-		result.AddError("name", cniConfig["name"], "name is required and must be a string")
-	}
-
-	// Validate plugins array
-	if plugins, ok := cniConfig["plugins"]; ok {
-		if pluginsArray, ok := plugins.([]interface{}); ok {
-			if len(pluginsArray) == 0 {
-				result.AddError("plugins", pluginsArray, "plugins array cannot be empty")
-			}
-		} else {
-			result.AddError("plugins", plugins, "plugins must be an array")
+	_, err := libcni.ConfListFromBytes(configData)
+	if err != nil {
+		_, err2 := libcni.NetworkPluginConfFromBytes(configData)
+		if err2 != nil {
+			result.AddError("config", string(configData), fmt.Sprintf("failed to parse CNI config as list: %v; as single plugin: %v", err, err2))
+			return result
 		}
 	}
-
 
 	return result
 }
